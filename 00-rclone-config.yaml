@@ -1,0 +1,48 @@
+apiVersion: v1
+data:
+  crontab: |
+    # do daily/weekly/monthly maintenance
+    # min   hour    day     month   weekday command
+    0        0      */1       *       *       sqlcmd -i /config/sqlbackupfile.sql -S fi-mssql.data.svc.cluster.local -U sa -P mssqlpass && rclone copy /data/backup minio:mssql-backup/$( date '+%F_%H:%M:%S' ) -v
+
+  rclone.conf: |
+    [minio]
+    type = s3
+    provider = Other
+    env_auth = false
+    access_key_id = minio
+    region = us-east-1
+    secret_access_key = miniosecret
+    endpoint = http://minio:9000
+  sqlbackupfile.sql: |
+    DECLARE @DB_Name varchar(100) 
+    DECLARE @Command nvarchar(4000) 
+    DECLARE database_cursor CURSOR FOR 
+    SELECT name 
+    FROM MASTER.sys.sysdatabases 
+
+    OPEN database_cursor 
+
+    FETCH NEXT FROM database_cursor INTO @DB_Name 
+
+    WHILE @@FETCH_STATUS = 0 
+    BEGIN 
+        IF @DB_Name NOT IN ('master','tempdb', 'model', 'msdb')
+        BEGIN
+            SELECT @Command = '
+            BACKUP DATABASE '+ '['+ @DB_Name + ']' + ' TO  DISK = N' +CHAR(39)+ '/var/opt/mssql/backup/'+ @DB_Name + '.bak' +CHAR(39) 
+            + ' WITH NOFORMAT, NOINIT,  NAME = N' +CHAR(39)+ @DB_Name +' Database Backup'+ CHAR(39)+ ', SKIP, NOREWIND, NOUNLOAD, STATS = 10';
+
+            PRINT @Command
+            EXEC sp_executesql @Command 
+        END
+
+        FETCH NEXT FROM database_cursor INTO @DB_Name 
+    END 
+
+    CLOSE database_cursor 
+    DEALLOCATE database_cursor
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: rclone-config
